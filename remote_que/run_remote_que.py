@@ -4,6 +4,7 @@ import subprocess
 import pandas as pd
 import time
 import nvgpu
+import asyncio
 
 from typing import List, Union
 
@@ -11,12 +12,13 @@ LOCK_FILE_NAME = ".lock_que"
 QUE_FILE_NAME = "que.csv"
 DEFAULT_EDITOR = "gedit"
 
-QUE_FILE_HEADER = "que_priority, shell_command, preferred_gpu, num_gpus, user"
+QUE_FILE_HEADER = "que_priority, shell_command, preferred_resource, num_gpus, user"
 QUE_FILE_HELP = f"__QUE FILE HELP__:\n" \
                 f"\t Que file should be a parsable comma delimited file with header: \n" \
                 f"\t\t{QUE_FILE_HEADER}\n\n" \
-                f"\t Preferred gpu can be set to -1, else process will wait for preferred gpu to " \
-                f"be available"
+                f"\t Preferred gpu can be set to -1, else process will wait for preferred_resource " \
+                f"to be available\n" \
+                f"\t USER: owner of process"
 
 
 def check_if_process_is_running(process_name: str):
@@ -98,6 +100,87 @@ def read_remote_que(results_folder: str):
     return que_data
 
 
+class ProcessSlot:
+    """
+        This class should manage a resources: Start process, check availability, history etc.
+        TODO: extend to work on multiple machines
+    """
+    def start_command(self, command_id: int, command: str) -> bool:
+        """
+            should start the command (linux shell) and manage it
+            :return If command was started successful
+        """
+
+        raise NotImplemented
+
+    def has_resource(self, resource: str) -> bool:
+        """ Check if resource is available on this allocated process slot
+        :param resource:
+        :return:
+        """
+        raise NotImplemented
+
+    @property
+    def is_available(self) -> bool:
+        """ Check if this process is available for new command """
+        raise NotImplemented
+
+    @property
+    def describe(self) -> str:
+        """ Describe resource (such as machine, gpus)"""
+        raise NotImplemented
+
+    def kill_running(self) -> bool:
+        """ Kill running process """
+        raise NotImplemented
+
+
+class SingleMachineSlot(ProcessSlot):
+    def __init__(self, gpus: List[int], stdout_folder: str, wait_time_start: int = 1):
+        self.gpus = gpus
+        self.wait_time_start = wait_time_start
+        self.stdout_folder = stdout_folder
+
+        if not os.path.isdir(stdout_folder):
+            os.makedirs(stdout_folder)
+
+        self._crt_stdout_file = None
+        self._crt_stderr_file = None
+
+    def start_command(self, command_id: int, command: str) -> bool:
+        if not self.is_available:
+            return False
+
+        fld = self.stdout_folder
+
+        self._crt_stdout_file = of = open(os.path.join(fld, f"proc_{command_id}_out"), "w")
+        self._crt_stderr_file = open(os.path.join(fld, f"proc_{command_id}_err"), "w")
+
+        proc = await asyncio.create_subprocess_exec(
+            'ls -lha',
+            stdout=self._crt_stdout_file,
+            stderr=self._crt_stderr_file,
+        )
+
+    def has_resource(self, resource: str) -> bool:
+        """ Check if resource is available on this allocated process slot
+        :param resource:
+        :return:
+        """
+        raise NotImplemented
+
+    @property
+    def is_available(self) -> bool:
+        """ Check if this process is available for new command """
+        raise NotImplemented
+
+    @property
+    def describe(self) -> str:
+        """ Describe resource (such as machine, gpus)"""
+        raise NotImplemented
+
+
+
 class QueManager:
     def __init__(self, remote_que_file: str, results_folder: str,
                      gpu_ids: List[int], procs_per_gpu: Union[int, List[int]]):
@@ -131,7 +214,6 @@ class QueManager:
             cmd = input("Are you sure you want to continue? If yes, write <yes> and press Enter "
                        "... ")
 
-            # TODO check if there exist any subprocess run_remote
             if cmd.lower() != "yes":
                 exit(1)
 
