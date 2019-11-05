@@ -5,6 +5,7 @@ import pandas as pd
 import time
 import nvgpu
 import asyncio
+from subprocess import Popen
 
 from typing import List, Union
 
@@ -20,6 +21,12 @@ QUE_FILE_HELP = f"__QUE FILE HELP__:\n" \
                 f"to be available\n" \
                 f"\t USER: owner of process"
 
+DEFAULT_RESOURCE = dict({
+    "preferred_gpu": -1, # Index of GPU
+    "no_gpus" : 1,
+    "max_procs_on_gpu": 4,
+    # TODO implement selection of machine
+})
 
 def check_if_process_is_running(process_name: str):
     ''' Check if there is any running process that contains the given name processName. '''
@@ -100,44 +107,9 @@ def read_remote_que(results_folder: str):
     return que_data
 
 
-class ProcessSlot:
-    """
-        This class should manage a resources: Start process, check availability, history etc.
-        TODO: extend to work on multiple machines
-    """
-    def start_command(self, command_id: int, command: str) -> bool:
-        """
-            should start the command (linux shell) and manage it
-            :return If command was started successful
-        """
-
-        raise NotImplemented
-
-    def has_resource(self, resource: str) -> bool:
-        """ Check if resource is available on this allocated process slot
-        :param resource:
-        :return:
-        """
-        raise NotImplemented
-
-    @property
-    def is_available(self) -> bool:
-        """ Check if this process is available for new command """
-        raise NotImplemented
-
-    @property
-    def describe(self) -> str:
-        """ Describe resource (such as machine, gpus)"""
-        raise NotImplemented
-
-    def kill_running(self) -> bool:
-        """ Kill running process """
-        raise NotImplemented
-
-
-class SingleMachineSlot(ProcessSlot):
+class SingleMachineSlot:
     def __init__(self, gpus: List[int], stdout_folder: str, wait_time_start: int = 1):
-        self.gpus = gpus
+        self.gpus = ",".join(gpus)
         self.wait_time_start = wait_time_start
         self.stdout_folder = stdout_folder
 
@@ -146,6 +118,7 @@ class SingleMachineSlot(ProcessSlot):
 
         self._crt_stdout_file = None
         self._crt_stderr_file = None
+        self._proc = None
 
     def start_command(self, command_id: int, command: str) -> bool:
         if not self.is_available:
@@ -153,58 +126,87 @@ class SingleMachineSlot(ProcessSlot):
 
         fld = self.stdout_folder
 
-        self._crt_stdout_file = of = open(os.path.join(fld, f"proc_{command_id}_out"), "w")
-        self._crt_stderr_file = open(os.path.join(fld, f"proc_{command_id}_err"), "w")
+        self._crt_stdout_file = sof = open(os.path.join(fld, f"proc_{command_id}_out"), "w")
+        self._crt_stderr_file = sef = open(os.path.join(fld, f"proc_{command_id}_err"), "w")
 
-        proc = await asyncio.create_subprocess_exec(
-            'ls -lha',
-            stdout=self._crt_stdout_file,
-            stderr=self._crt_stderr_file,
-        )
+        command = f"CUDA_VISIBLE_DEVICES={self.gpus} {command}"
+        self._proc = Popen(command, shell=True, stdout=sof, stderr=sef)
 
-    def has_resource(self, resource: str) -> bool:
-        """ Check if resource is available on this allocated process slot
-        :param resource:
-        :return:
-        """
-        raise NotImplemented
+        time.sleep(self.wait_time_start)
+        return self.is_running
 
     @property
-    def is_available(self) -> bool:
-        """ Check if this process is available for new command """
-        raise NotImplemented
+    def is_running(self) -> bool:
+        if self._proc is None:
+            return False
+
+        return self._proc.poll() is None
 
     @property
-    def describe(self) -> str:
-        """ Describe resource (such as machine, gpus)"""
-        raise NotImplemented
+    def finished(self) -> bool:
+        if self._proc is None:
+            return True
 
+        return self._proc.poll() is not None
+
+    def kill(self) -> int:
+        if self._proc is None:
+            return 0
+
+        self._proc.kill()
+
+        try:
+            self._crt_stdout_file.flush()
+            self._crt_stderr_file.flush()
+        except:
+            pass
+
+        self._crt_stdout_file.close()
+        self._crt_stderr_file.close()
+
+        return_code = self._proc.poll()
+
+        self._proc = None
+        self._crt_stdout_file = None
+        self._crt_stderr_file= None
+
+        return return_code
+
+
+class ResourceAvailability:
+    def __init__(self, machines: List[str]):
+        # TODO should implement for multiple machines
+        pass
+
+    def check_availability(self, resource: dict):
+        resources = DEFAULT_RESOURCE.update(resource)
+
+        available = self.gpu_stats()
+        if "preferred_gpu" in resource:
+            if resource["preferred_gpu"] != -1:
+                
+                
+
+
+
+    @property
+    def gpu_stats(self) -> pd.DataFrame:
+        x = pd.DataFrame.from_dict(nvgpu.gpu_info())
+        x["machine"] = 0
+        x["free"] = x["mem_total"] - x["mem_free"]
+        return x
 
 
 class QueManager:
-    def __init__(self, remote_que_file: str, results_folder: str,
-                     gpu_ids: List[int], procs_per_gpu: Union[int, List[int]]):
+    def __init__(self, remote_que_file: str, results_folder: str):
 
         assert os.path.isfile(remote_que_file), f"{remote_que_file} is not a file!"
-
-        assert isinstance(gpu_ids, list) and len(
-            gpu_ids) > 0, f"GPU ids argument not correct {gpu_ids}"
-        assert isinstance(procs_per_gpu, list) or isinstance(procs_per_gpu, int), \
-            f"Procs / gpu argument not correct {procs_per_gpu}"
-
-        if isinstance(procs_per_gpu, list):
-            assert len(procs_per_gpu) == len(gpu_ids), "len(list(Procs / gpu)) != len(gpu_ids)"
 
         # Generate remote que folder
         os.makedirs(results_folder)
         assert os.path.isdir(results_folder), f"Cannot create results folder {results_folder}"
 
         self.results_folder = results_folder
-        self.gpu_ids = gpu_ids
-
-        self.available_gpus = [x["index"] for x in nvgpu.gpu_info()]
-        assert self.gpu_ids <= self.available_gpus, \
-            f"Selected GPUS ({self.gpu_ids}) not included in available GPUS: {self.available_gpus}"
 
         self._que_lock_file = os.path.join(results_folder, ".lock_que")
 
