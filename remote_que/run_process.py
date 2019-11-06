@@ -7,7 +7,7 @@ from remote_que.logger import logger
 
 
 class SingleMachineSlot:
-    def __init__(self, gpus: List[int], stdout_folder: str, wait_time_start: int = 1):
+    def __init__(self, gpus: List[str], stdout_folder: str, wait_time_start: int = 1):
         self.gpus = ",".join([str(x) for x in gpus])
         self.wait_time_start = wait_time_start
         self.stdout_folder = stdout_folder
