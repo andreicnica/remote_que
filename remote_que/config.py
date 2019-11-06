@@ -1,5 +1,9 @@
 LOCK_FILE_NAME = ".lock_que"
 QUE_FILE_NAME = "que.csv"
+STARTED_FILE_NAME = ".started.csv"
+CRASHED_FILE_NAME = ".crashed.csv"
+RUNNING_FILE_NAME = ".running.csv"
+
 DEFAULT_EDITOR = "gedit"
 
 QUE_FILE_HEADER = "que_priority, shell_command, preferred_resource, user, command_id"
@@ -23,3 +27,5 @@ DEFAULT_RESOURCE = dict({
     # TODO implement selection of machine
 })
 
+DEFAULT_CONFIRM_START_TIMEOUT = 10
+DEFAULT_CONFIRM_START_MAX_WAIT = 360

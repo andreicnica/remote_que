@@ -37,92 +37,98 @@ def edit_que_data(results_folder: str):
     return_code = subprocess.call(f"{DEFAULT_EDITOR} {que_file}", shell=True)
 
     if return_code > 0:
-        print(f"[ERROR] An exception occurred when writing or reading QUE FILE (@{que_file}). \n"
-              f"[ERROR] Fix que file! (error code: {return_code})")
-        print(QUE_FILE_HELP)
+        try:
+            que_data = read_remote_que(results_folder)
+        except RuntimeError:
+            return_code = 666
+
+    if return_code > 0:
+        logger.warning(f"[ERROR] An exception occurred when writing or reading QUE FILE "
+                       f"(@ {que_file}). - Current edited file was writen (@ {que_file}_failed)\n"
+                       f"--- REVERTING TO PREVIOUS QUE FILE ---\n"
+                       f"[ERROR] Fix que file! (error code: {return_code})")
+        logger.info(QUE_FILE_HELP)
+
+        # Write current failed file to failed & rewrite old file
         copyfile(que_file, que_file + "_failed")
 
         # Write back old csv file
         original_que.to_csv(que_file, index=False)
-
-        exit(2)
     else:
-    que_data = read_remote_que(results_folder)
+        # Validate que data. It was  just written
+        # TODO validate data
 
-    # Validate que data. It was  just written
-    # TODO validate data
+        # Run match special pattern and interpret
+        multiply = []
+        for que_idx, data in que_data.iterrows():
+            cmd = data["shell_command"]
 
-    # Run match special pattern and interpret
-    multiply = []
-    for que_idx, data in que_data.iterrows():
-        cmd = data["shell_command"]
+            repl_data = []
+            splits = []
+            split = cmd
+            while True:
+                match = re.search(r"\[{([^}]*)}\]", split)
+                if match is None:
+                    break
+                interp = eval(match[1])
 
-        repl_data = []
-        splits = []
-        split = cmd
-        while True:
-            match = re.search(r"\[{([^}]*)}\]", split)
-            if match is None:
-                break
-            interp = eval(match[1])
+                if not isinstance(interp, list):
+                    interp = [interp]
 
-            if not isinstance(interp, list):
-                interp = [interp]
+                repl_data.append(interp)
+                span = match.span()
+                splits.append(split[:span[0]])
+                split = split[span[1]:]
 
-            repl_data.append(interp)
-            span = match.span()
-            splits.append(split[:span[0]])
-            split = split[span[1]:]
+            if len(repl_data) <= 0:
+                continue
 
-        if len(repl_data) <= 0:
-            continue
+            cmds = []
+            for combination in itertools.product(*repl_data):
+                new_cmd = ""
+                for i, sp in enumerate(combination):
+                    new_cmd += splits[i] + str(sp)
+                if len(combination) < len(splits):
+                    new_cmd += splits[-1]
+                cmds.append(new_cmd)
+            multiply.append((que_idx, cmds))
 
-        cmds = []
-        for combination in itertools.product(*repl_data):
-            new_cmd = ""
-            for i, sp in enumerate(combination):
-                new_cmd += splits[i] + str(sp)
-            if len(combination) < len(splits):
-                new_cmd += splits[-1]
-            cmds.append(new_cmd)
-        multiply.append((que_idx, cmds))
+        # Append new commands
+        for que_idx, cmds in multiply:
+            for new_cmd in cmds:
+                new_idx = len(que_data)
+                que_data.loc[new_idx] = que_data.loc[que_idx]
+                que_data.loc[new_idx, "shell_command"] = new_cmd
 
-    # Append new commands
-    for que_idx, cmds in multiply:
-        for new_cmd in cmds:
-            new_idx = len(que_data)
-            que_data.loc[new_idx] = que_data.loc[que_idx]
-            que_data.loc[new_idx, "shell_command"] = new_cmd
+        # Remove multiplied indexes
+        for que_idx, _ in multiply:
+            que_data.drop(que_idx)
 
-    # Remove multiplied indexes
-    for que_idx, _ in multiply:
-        que_data.drop(que_idx)
+        for que_idx, data in que_data.iterrows():
+            # Allocate new id to newly added command
+            if data["command_id"] == 0:
+                data["command_id"] = int(time.time() * 1000)
 
-    for que_idx, data in que_data.iterrows():
-        # Allocate new id to newly added command
-        if data["command_id"] == 0:
-            data["command_id"] = int(time.time() * 1000)
+        # Write preprocessed new data
+        que_data.to_csv(que_file, index=False)
 
-    # Write preprocessed new data
-    que_data.to_csv(que_file, index=False)
+        logger.info("[DONE] New que saved! Here is the que sorted by priority: \n")
+        logger.info(que_data.sort_values('que_priority'))
 
     # Generate new lock file
     with open(lock_file, "w") as f:
         f.write(str(time.time()))
 
-    print("[DONE] New que saved! Here is the que sorted by priority: \n")
-    print(que_data.sort_values('que_priority'))
-
-    return True
+    return return_code == 0
 
 
-def read_remote_que(results_folder: str):
+def read_remote_que(results_folder: str) -> pd.DataFrame:
     que_file = os.path.join(results_folder, QUE_FILE_NAME)
     return_code = 0
 
     try:
         que_data = pd.read_csv(que_file)
-    except:
+    except RuntimeError:
         return_code = 2
 
     # check columns
@@ -144,12 +150,22 @@ def read_remote_que(results_folder: str):
     return que_data
 
 
+def write_to_started_log():
+    pass
+
+
 def sample_gpus(gpus: pd.DataFrame, no_gpus: int) -> List[pd.DataFrame, str, List[str]]:
     machines = gpus.machine.unique()
     machine = np.random.choice(machines)
     gpus = gpus[gpus.machine == machine]
     select = gpus.head(no_gpus)
     return select, machine, list(select["index"].values)
+
+
+def filter_out_gpus(gpus: pd.DataFrame, filter_gpus: List[pd.DataFrame]):
+    filter_out = pd.concat(filter_gpus)["unique_gpu"].values
+    gpus = gpus[~gpus["unique_gpu"].isin(filter_out)]
+    return gpus
 
 
 class QueManager:
@@ -182,7 +198,7 @@ class QueManager:
         assert rreturn_code, "Did not edit correctly que file"
 
         # Session variables
-        self._running_que = []
+        self._running_que = []  # type: List[SingleMachineSlot]
 
     @property
     def remote_que_available(self):
@@ -195,45 +211,69 @@ class QueManager:
     def start_command(self, que_data: pd.Series, machine: str, gpus: List[str]) -> bool:
         logger.info(f"Starting: {que_data.to_dict()}")
         proc = SingleMachineSlot(gpus)
+        self._running_que.append(proc)
+
         command = que_data["shell_command"]
         command_id = que_data["command_id"]
-        proc.start_command(command)
-        return True
+
+        is_running = proc.start_command(command_id, command)
+
+        return is_running
 
     def run_que(self):
-        que_data = None  # type: pd.DataFrame
         resource_m = self._resource_manager
 
         while True:
-            if self.remote_que_locked:
-                que_data = read_remote_que(self.results_folder)
-                que_data = que_data.sort_values("que_priority")
+            if not self.remote_que_locked:
+                time.sleep(1)
 
-                # check all procs in que (ordered by priority) and see if any can be started
-                crashed_procs = []
-                started_procs = []
+            que_data = read_remote_que(self.results_folder)
+            que_data = que_data.sort_values("que_priority")
 
-                for qi, qdata in que_data.iterrows():
-                    necessary_resource = qdata["preferred_resource"]
-                    no_gpus = necessary_resource["no_gpus"]
+            # -- Check all procs in que (ordered by priority) and see if any can be started
+            crashed_procs = []
+            started_procs = []
+            blocked_gpus = []
 
-                    try:
-                        available_gpus = resource_m.get_availability(necessary_resource)
-                    except RuntimeError as e:
-                        logger.warning(f"[ERROR] Get availability {e}:: {qdata}")
-                        crashed_procs.append(qi)
-                        continue
+            for qi, qdata in que_data.iterrows():
+                necessary_resource = qdata["preferred_resource"]
+                no_gpus = necessary_resource["no_gpus"]
 
-                    if len(available_gpus) <= 0:
-                        continue
+                try:
+                    available_gpus = resource_m.get_availability(necessary_resource)
+                except RuntimeError as e:
+                    logger.warning(f"[ERROR] Get availability {e}:: {qdata}")
+                    crashed_procs.append(qi)
+                    continue
 
-                    # Sample no_gpus
-                    gpu_sample, machine, gpus = sample_gpus(available_gpus, no_gpus)
+                if len(available_gpus) <= 0:
+                    continue
 
-                    if len(gpus) != no_gpus:
-                        logger.warning(f"[ERROR] Selecting available gpus did not work "
-                                       f"{available_gpus} - {no_gpus}")
-                        continue
+                # Filter already blocked resources
+                available_gpus = filter_out_gpus(available_gpus, blocked_gpus)
+
+                # Sample no_gpus
+                gpu_sample, machine, gpus = sample_gpus(available_gpus, no_gpus)
+
+                if len(gpus) != no_gpus:
+                    logger.warning(f"[ERROR] Selecting available gpus did not work "
+                                   f"{available_gpus} - {no_gpus}")
+                    continue
+
+                start_result = self.start_command(que_data, machine, gpus)
+                logger.info(f'STARTED proc: {que_data["command_id"]} - success '
+                            f'{start_result} - ({que_data.to_dict()})')
+
+                started_procs.append(qi)
+                blocked_gpus.append(gpu_sample)
+
+            # -- Wait until currently started procs confirm start
+            for proc in self._running_que:
+                if self.pro
+
+
+
+
 
 
 

@@ -2,7 +2,6 @@ from typing import List
 import pandas as pd
 import nvgpu
 
-from remote_que.logger import logger
 from remote_que.config import DEFAULT_RESOURCE
 from remote_que.utils import get_gpu_pids
 
@@ -74,6 +73,7 @@ class ResourceAvailability:
         x = pd.DataFrame.from_dict(nvgpu.gpu_info())
         x["machine"] = 0
         x["mem_free"] = x["mem_total"] - x["mem_used"]
+        x["unique_gpu"] = x.apply(lambda y: (y["machine"], y["index"]))
         return x
 
 

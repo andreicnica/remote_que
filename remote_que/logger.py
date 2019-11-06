@@ -3,15 +3,15 @@ import logging
 
 class RemoteQueLogging(logging.Logger):
     def __init__(
-        self,
-        name,
-        level,
-        filename=None,
-        filemode="a",
-        stream=None,
-        format=None,
-        dateformat=None,
-        style="%",
+            self,
+            name: str,
+            level: int,
+            filename: str =None,
+            filemode: str ="a",
+            stream=None,
+            format=None,
+            dateformat=None,
+            style="%",
     ):
         super().__init__(name, level)
         if filename is not None:

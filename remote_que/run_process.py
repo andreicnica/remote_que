@@ -4,10 +4,12 @@ import time
 from subprocess import Popen
 
 from remote_que.logger import logger
+from remote_que.config import DEFAULT_CONFIRM_START_TIMEOUT
 
 
 class SingleMachineSlot:
-    def __init__(self, gpus: List[str], stdout_folder: str, wait_time_start: int = 1):
+    def __init__(self, gpus: List[str], stdout_folder: str, log_start_confirm: str = None,
+                 wait_time_start: int = 1):
         self.gpus = ",".join([str(x) for x in gpus])
         self.wait_time_start = wait_time_start
         self.stdout_folder = stdout_folder
@@ -18,6 +20,8 @@ class SingleMachineSlot:
         self._crt_stdout_file = None
         self._crt_stderr_file = None
         self._proc = None
+        self._confirmed_start = False
+        self._log_start_confirm = log_start_confirm
 
     def start_command(self, command_id: int, command: str) -> bool:
         if self.is_running:
@@ -33,6 +37,18 @@ class SingleMachineSlot:
 
         time.sleep(self.wait_time_start)
         return self.is_running
+
+    @property
+    def confirmed_start(self) -> bool:
+        return self._confirmed_start
+
+    @property
+    def wait_start(self) -> None:
+        if self._log_start_confirm is None:
+            time.sleep(DEFAULT_CONFIRM_START_TIMEOUT)
+            self._confirmed_start = True
+        else:
+
 
     @property
     def is_running(self) -> bool:
