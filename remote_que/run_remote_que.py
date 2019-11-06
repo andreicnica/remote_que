@@ -1,45 +1,14 @@
 import os
-import psutil
 import subprocess
 import pandas as pd
 import time
 import nvgpu
 import asyncio
-from subprocess import Popen
-
 from typing import List, Union
 
-LOCK_FILE_NAME = ".lock_que"
-QUE_FILE_NAME = "que.csv"
-DEFAULT_EDITOR = "gedit"
+from remote_que.logger import logger
 
-QUE_FILE_HEADER = "que_priority, shell_command, preferred_resource, num_gpus, user"
-QUE_FILE_HELP = f"__QUE FILE HELP__:\n" \
-                f"\t Que file should be a parsable comma delimited file with header: \n" \
-                f"\t\t{QUE_FILE_HEADER}\n\n" \
-                f"\t Preferred gpu can be set to -1, else process will wait for preferred_resource " \
-                f"to be available\n" \
-                f"\t USER: owner of process"
 
-DEFAULT_RESOURCE = dict({
-    "preferred_gpu": -1, # Index of GPU
-    "no_gpus" : 1,
-    "max_procs_on_gpu": 4,
-    # TODO implement selection of machine
-})
-
-def check_if_process_is_running(process_name: str):
-    ''' Check if there is any running process that contains the given name processName. '''
-
-    # Iterate over the all the running process
-    for proc in psutil.process_iter():
-        try:
-            # Check if process name contains the given name string.
-            if process_name.lower() in proc.name().lower():
-                return True
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            pass
-        return False
 
 
 def edit_que_data(results_folder: str):
@@ -107,94 +76,8 @@ def read_remote_que(results_folder: str):
     return que_data
 
 
-class SingleMachineSlot:
-    def __init__(self, gpus: List[int], stdout_folder: str, wait_time_start: int = 1):
-        self.gpus = ",".join(gpus)
-        self.wait_time_start = wait_time_start
-        self.stdout_folder = stdout_folder
-
-        if not os.path.isdir(stdout_folder):
-            os.makedirs(stdout_folder)
-
-        self._crt_stdout_file = None
-        self._crt_stderr_file = None
-        self._proc = None
-
-    def start_command(self, command_id: int, command: str) -> bool:
-        if not self.is_available:
-            return False
-
-        fld = self.stdout_folder
-
-        self._crt_stdout_file = sof = open(os.path.join(fld, f"proc_{command_id}_out"), "w")
-        self._crt_stderr_file = sef = open(os.path.join(fld, f"proc_{command_id}_err"), "w")
-
-        command = f"CUDA_VISIBLE_DEVICES={self.gpus} {command}"
-        self._proc = Popen(command, shell=True, stdout=sof, stderr=sef)
-
-        time.sleep(self.wait_time_start)
-        return self.is_running
-
-    @property
-    def is_running(self) -> bool:
-        if self._proc is None:
-            return False
-
-        return self._proc.poll() is None
-
-    @property
-    def finished(self) -> bool:
-        if self._proc is None:
-            return True
-
-        return self._proc.poll() is not None
-
-    def kill(self) -> int:
-        if self._proc is None:
-            return 0
-
-        self._proc.kill()
-
-        try:
-            self._crt_stdout_file.flush()
-            self._crt_stderr_file.flush()
-        except:
-            pass
-
-        self._crt_stdout_file.close()
-        self._crt_stderr_file.close()
-
-        return_code = self._proc.poll()
-
-        self._proc = None
-        self._crt_stdout_file = None
-        self._crt_stderr_file= None
-
-        return return_code
 
 
-class ResourceAvailability:
-    def __init__(self, machines: List[str]):
-        # TODO should implement for multiple machines
-        pass
-
-    def check_availability(self, resource: dict):
-        resources = DEFAULT_RESOURCE.update(resource)
-
-        available = self.gpu_stats()
-        if "preferred_gpu" in resource:
-            if resource["preferred_gpu"] != -1:
-                
-                
-
-
-
-    @property
-    def gpu_stats(self) -> pd.DataFrame:
-        x = pd.DataFrame.from_dict(nvgpu.gpu_info())
-        x["machine"] = 0
-        x["free"] = x["mem_total"] - x["mem_free"]
-        return x
 
 
 class QueManager:
@@ -245,6 +128,10 @@ def start_remote_que(remote_que_file: str, results_folder: str,
 
     que_manager = QueManager(remote_que_file, results_folder, gpu_ids, procs_per_gpu)
 
+    log_file = "test"
+
+    # Get object index
+    logger.add_filehandler(log_file)
 
 if __name__ == "__main__":
     edit_que_data("./")
