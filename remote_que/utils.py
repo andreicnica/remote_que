@@ -2,6 +2,7 @@ import psutil
 import subprocess
 import pandas as pd
 
+
 def check_if_process_is_running(process_name: str) -> bool:
     """ Check if there is any running process that contains the given name processName """
 

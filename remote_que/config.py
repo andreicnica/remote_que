@@ -1,12 +1,25 @@
+import os
+from collections import OrderedDict
+
+
 LOCK_FILE_NAME = ".lock_que"
 QUE_FILE_NAME = "que.csv"
 STARTED_FILE_NAME = ".started.csv"
-CRASHED_FILE_NAME = ".crashed.csv"
+CRASHED_FILE_NAME = ".crashed_start.csv"
+FINISHED_FILE_NAME = ".finished.csv"
+CRASHED_START_FILE_NAME = ".crashed.csv"
 RUNNING_FILE_NAME = ".running.csv"
 
 DEFAULT_EDITOR = "gedit"
 
-QUE_FILE_HEADER = "que_priority, shell_command, preferred_resource, user, command_id"
+QUE_FILE_HEADER_TYPE = OrderedDict({
+    "que_priority": int,
+    "shell_command": str,
+    "preferred_resource": dict,
+    "user": str,
+    "command_id": int
+})
+QUE_FILE_HEADER = ",".join(QUE_FILE_HEADER_TYPE.keys())
 
 QUE_FILE_HELP = f"__QUE FILE HELP__:\n" \
                 f"\t Que file should be a parsable comma delimited file with header: \n" \
@@ -29,3 +42,31 @@ DEFAULT_RESOURCE = dict({
 
 DEFAULT_CONFIRM_START_TIMEOUT = 10
 DEFAULT_CONFIRM_START_MAX_WAIT = 360
+
+
+def get_lock_file(folder: str):
+    return os.path.join(folder, LOCK_FILE_NAME)
+
+
+def get_que_file(folder: str):
+    return os.path.join(folder, QUE_FILE_NAME)
+
+
+def get_started_file(folder: str):
+    return os.path.join(folder, STARTED_FILE_NAME)
+
+
+def get_running_file(folder: str):
+    return os.path.join(folder, RUNNING_FILE_NAME)
+
+
+def get_crash_file(folder: str):
+    return os.path.join(folder, CRASHED_FILE_NAME)
+
+
+def get_crash_start_file(folder: str):
+    return os.path.join(folder, CRASHED_START_FILE_NAME)
+
+
+def get_finished_file(folder: str):
+    return os.path.join(folder, FINISHED_FILE_NAME)
