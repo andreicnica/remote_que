@@ -15,6 +15,7 @@ from remote_que.config import DEFAULT_EDITOR, QUE_FILE_HELP
 from remote_que.config import get_que_file
 from remote_que.config import get_started_file, get_running_file, get_crash_file, get_lock_file
 from remote_que.config import get_finished_file, get_crash_start_file
+from remote_que.config import DEFAULT_RESOURCE
 
 from remote_que.utils import check_if_process_is_running
 from remote_que.resource_management import ResourceAvailability
@@ -29,6 +30,24 @@ STATE_RUNNING = 1
 STATE_FINISHED = 1
 
 
+def write_que_data(results_folder: str, que_data: pd.DataFrame) -> bool:
+    que_file = get_que_file(results_folder)
+    lock_file = get_lock_file(results_folder)
+
+    # Must have lock to write
+    if not os.path.isfile(lock_file):
+        return False
+    os.remove(lock_file)
+
+    que_data.to_csv(que_file, index=False)
+
+    # Generate new lock file
+    with open(lock_file, "w") as f:
+        f.write(str(time.time()))
+
+    return True
+
+
 def edit_que_data(results_folder: str):
     # First remove lock file if it exists (to block QueManager from reading new procs)
     que_file = get_que_file(results_folder)
@@ -36,6 +55,8 @@ def edit_que_data(results_folder: str):
     lock_file = get_lock_file(results_folder)
     if os.path.isfile(lock_file):
         os.remove(lock_file)
+    else:
+        return 1234
 
     # -- Can open que file for edit now.
 
@@ -53,7 +74,7 @@ def edit_que_data(results_folder: str):
         # Try read row by row and validate, log not working rows and remove
         try:
             que_data = read_remote_que(results_folder)
-        except RuntimeError:
+        except Exception:
             return_code = 666
 
     if return_code != 0:
@@ -128,8 +149,8 @@ def edit_que_data(results_folder: str):
         # Write preprocessed new data
         que_data.to_csv(que_file, index=False)
 
-        logger.info("[DONE] New que saved! Here is the que sorted by priority:")
-        logger.info(f"\n{que_data.sort_values('que_priority')}")
+        logger.info(f"[DONE] New que saved! Here is the que sorted by priority:\n"
+                    f"{que_data.sort_values('que_priority')}\n\n")
 
     # Generate new lock file
     with open(lock_file, "w") as f:
@@ -181,16 +202,16 @@ def read_remote_que(results_folder: str) -> pd.DataFrame:
                         r = None
                         try:
                             r = eval(csv_interpret[i])
-                        except RuntimeError:
+                        except Exception as e:
                             pass
 
-                        if isinstance(r, v):
+                        if not isinstance(r, v):
                             valid = False
                             break
 
                         line_data.append(r)
                     else:
-                        line_data.append(v)
+                        line_data.append(csv_interpret[i])
 
                 if valid:
                     correct_lines.append(line)
@@ -201,12 +222,12 @@ def read_remote_que(results_folder: str) -> pd.DataFrame:
             # Write blacklisted lines to crash_starts
             if len(blacklisted_lines) > 0:
                 write_lines = "\n".join(blacklisted_lines) + "\n"
-                logger.warning(f"Cannot read lines: \n: {write_lines}")
+                logger.warning(f"Cannot read lines: \n{write_lines}")
                 with open(get_crash_start_file(results_folder), "a") as f:
                     f.writelines(blacklisted_lines)
 
-            que_data = pd.DataFrame(correct_lines, columns=columns)
-        except RuntimeError:
+            que_data = pd.DataFrame(correct_lines_data, columns=columns)
+        except Exception as e:
             return_code = 2
 
     # check columns
@@ -249,6 +270,8 @@ def sample_gpus(gpus: pd.DataFrame, no_gpus: int) -> Tuple[pd.DataFrame, str, Li
 
 
 def filter_out_gpus(gpus: pd.DataFrame, filter_gpus: List[pd.DataFrame]):
+    if len(gpus) <= 0 or len(filter_gpus) <= 0:
+        return gpus
     filter_out = pd.concat(filter_gpus)["unique_gpu"].values
     gpus = gpus[~gpus["unique_gpu"].isin(filter_out)]
     return gpus
@@ -298,8 +321,15 @@ class QueManager:
         # Initialize resource manager
         self._resource_manager = ResourceAvailability(machines=["0.0.0.0"])
 
+        # First time write lock file so
+        lock_file = get_lock_file(results_folder)
+        # Generate new lock file
+        with open(lock_file, "w") as f:
+            f.write(str(time.time()))
+
         # Wonderful -> Can open que for edit and start running
         rreturn_code = edit_que_data(self.results_folder)
+
         assert rreturn_code, "Did not edit correctly que file"
 
         # Session variables
@@ -320,7 +350,7 @@ class QueManager:
     def start_command(self, que_data: pd.Series, machine: str, gpus: List[str]) -> \
             Tuple[bool, SingleMachineSlot]:
         logger.info(f"Starting: {que_data.to_dict()}")
-        proc = SingleMachineSlot(gpus)
+        proc = SingleMachineSlot(gpus, self.results_folder)
         self._running_que.append(proc)
 
         command = que_data["shell_command"]
@@ -337,12 +367,30 @@ class QueManager:
 
     def run_que(self):
         resource_m = self._resource_manager
+        remove_ids = []
+        lock_file = get_lock_file(self.results_folder)
+        que_file = get_que_file(self.results_folder)
 
         while True:
             if not self.remote_que_locked:
                 time.sleep(1)
 
+            # Wait for lock file to exist
+            while not os.path.isfile(lock_file):
+                time.sleep(1)
+            os.remove(lock_file)
+
             que_data = read_remote_que(self.results_folder)
+
+            # Remove previously started commands ids and update file:
+            que_data = que_data[~(que_data["command_id"].isin(remove_ids))]
+            remove_ids = []
+            que_data.to_csv(que_file, index=False)
+
+            # Generate new lock file
+            with open(lock_file, "w") as f:
+                f.write(str(time.time()))
+
             que_data = que_data.sort_values("que_priority")
 
             # -- Check all procs in que (ordered by priority) and see if any can be started
@@ -352,7 +400,9 @@ class QueManager:
             started_true_procs = []
 
             for qi, qdata in que_data.iterrows():
-                necessary_resource = qdata["preferred_resource"]
+                necessary_resource = DEFAULT_RESOURCE.copy()
+                necessary_resource.update(qdata["preferred_resource"])
+
                 no_gpus = necessary_resource["no_gpus"]
                 command_id = qdata["command_id"]
 
@@ -377,6 +427,9 @@ class QueManager:
                 # Filter already blocked resources
                 available_gpus = filter_out_gpus(available_gpus, blocked_gpus)
 
+                if len(available_gpus) <= 0:
+                    continue
+
                 # Sample no_gpus
                 gpu_sample, machine, gpus = sample_gpus(available_gpus, no_gpus)
 
@@ -385,9 +438,10 @@ class QueManager:
                                    f"{available_gpus} - {no_gpus}")
                     continue
 
-                start_result, last_proc = self.start_command(que_data, machine, gpus)
-                logger.info(f'STARTED proc: {que_data["command_id"]} - success '
-                            f'{start_result} - ({que_data.to_dict()})')
+                start_result, last_proc = self.start_command(qdata, machine, gpus)
+                logger.info(f'STARTED proc: {qdata["command_id"]} - success '
+                            f'{start_result} - ({qdata.to_dict()})')
+                print(4)
 
                 started_procs.append(qi)
                 started_true_procs.append(last_proc)
@@ -412,14 +466,17 @@ class QueManager:
 
             # -- Clean que_data
             for sqi in started_procs:
-                if sqi in que_data:
+                if sqi in que_data.index:
                     self.processed_que(que_data.loc[sqi], STATE_QUE, STATE_STARTED)
+                    remove_ids.append(que_data.loc[sqi, "command_id"])
                     que_data = que_data.drop(sqi)
 
             for cqi in crashed_start_procs:
-                if cqi in que_data:
+                if cqi in que_data.index:
                     self.processed_que(que_data.loc[cqi], STATE_QUE, STATE_CRASHED)
+                    remove_ids.append(que_data.loc[cqi, "command_id"])
                     que_data = que_data.drop(cqi)
+            # Update local que file
 
             # -- Add new running procs to running file
             for proc in started_true_procs:
@@ -454,15 +511,15 @@ class QueManager:
             self.consistency_check()
 
     def remove_running_id_from_file(self, command_id: int):
-        if not os.path.isfile(self._running_que):
+        if not os.path.isfile(self._running_file):
             return
         # Remove from running que
         # TODO should be cleanner & more save
-        running = pd.read_csv(self._running_que)
+        running = pd.read_csv(self._running_file)
         running_id = running[running["command_id"] == command_id].index
         for i in running_id:
             running = running.drop(i)
-        running.to_csv(self._running_que, index=False)
+        running.to_csv(self._running_file, index=False)
 
     def consistency_check(self):
         # TODO Should check running file if procs are still in class (e.g. may have been killed)
@@ -472,7 +529,7 @@ class QueManager:
 def start_remote_que(remote_que_file: str, results_folder: str,
                      gpu_ids: List[int], procs_per_gpu: Union[int, List[int]]):
     import os
-    os.spawnl(os.P_DETACH, 'some_long_running_command')
+    os.spawnl(os.P_DETACH, 'python test_gpu.py')
 
     que_manager = QueManager(remote_que_file, results_folder, gpu_ids, procs_per_gpu)
 
@@ -501,8 +558,12 @@ def argparse_menu():
 
 
 if __name__ == "__main__":
+    from subprocess import Popen
+
     args = argparse_menu()
+
     que = QueManager(**args.__dict__)
+    que.run_que()
 
 
 

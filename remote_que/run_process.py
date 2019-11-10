@@ -41,7 +41,8 @@ class SingleMachineSlot:
         self._crt_stdout_file = sof = open(os.path.join(fld, f"proc_{command_id}_out"), "w")
         self._crt_stderr_file = sef = open(os.path.join(fld, f"proc_{command_id}_err"), "w")
 
-        command = f"CUDA_VISIBLE_DEVICES={self.gpus} {command}"
+        # TODO Realtime flush to file ... not always ???
+        command = f"PYTHONUNBUFFERED=1 CUDA_VISIBLE_DEVICES={self.gpus} {command}"
         self._proc = Popen(command, shell=True, stdout=sof, stderr=sef)
 
         time.sleep(self._wait_time_start)
@@ -76,7 +77,7 @@ class SingleMachineSlot:
                     self._crt_stdout_file.flush()
                     with open(self._crt_stdout_file, "r") as f:
                         file_content = f.readlines()
-                except RuntimeError:
+                except Exception as e:
                     pass
 
                 for line in file_content:
@@ -135,7 +136,7 @@ class SingleMachineSlot:
         try:
             self._crt_stdout_file.flush()
             self._crt_stderr_file.flush()
-        except RuntimeError as e:
+        except Exception as e:
             logger.warning(f"[SingleMachineSlot] Exception was handled while flushing files ({e})")
 
         self._crt_stdout_file.close()

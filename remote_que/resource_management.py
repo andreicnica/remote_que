@@ -1,6 +1,7 @@
 from typing import List
 import pandas as pd
 import nvgpu
+import numpy as np
 
 from remote_que.config import DEFAULT_RESOURCE
 from remote_que.utils import get_gpu_pids
@@ -22,7 +23,6 @@ class ResourceAvailability:
         resource.update(resource_search)
 
         # TODO Check resource values types
-        print(DEFAULT_RESOURCE)
         if resource["no_gpus"] <= 0:
             return []
 
@@ -50,8 +50,20 @@ class ResourceAvailability:
 
                 gpu_pid_cnt = gpu_pids.groupby("index").size()
                 rem_gpu_idx = gpu_pid_cnt[gpu_pid_cnt > max_pr].index
+                print("start - ")
+                print(machine_select)
+                print(gpus.index)
+                print("===")
                 for gpu_idx in rem_gpu_idx:
-                    gpus = gpus[~(machine_select & gpus.index == gpu_idx)]
+                    print(1, gpu_idx)
+                    print("_----------")
+                    print(np.array(gpus.index))
+                    print(f"-{gpu_idx}-")
+                    print(2, np.array(gpus.index.values) == gpu_idx)
+                    print("_----------")
+                    print(3, machine_select & (gpus.index == gpu_idx))
+                    print(4, ~(machine_select & (gpus.index == gpu_idx)))
+                    gpus = gpus[~(machine_select & (gpus.index == gpu_idx))]
                     if len(gpus) <= 0:
                         return gpus
 
@@ -66,6 +78,7 @@ class ResourceAvailability:
         no_gpus_machine = gpus.groupby("machine").size()
         sel_machines = no_gpus_machine[no_gpus_machine >= resource["no_gpus"]].index
         gpus = gpus[gpus.index.isin(sel_machines)]
+
         return gpus
 
     @property

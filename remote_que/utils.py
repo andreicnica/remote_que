@@ -14,7 +14,7 @@ def check_if_process_is_running(process_name: str) -> bool:
                 return True
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass
-        return False
+    return False
 
 
 def get_csv_from_string(out: str) -> pd.DataFrame:
